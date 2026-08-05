@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.log
+
+.git/
+.gitignore
+.vscode/
+.idea/
+
+
+*.env
+*secret*
+*.key
+*.crt

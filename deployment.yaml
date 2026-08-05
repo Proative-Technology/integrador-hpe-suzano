@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: integrador-hpe-suzano
+  namespace: integrador-hpe-suzano
+  labels:
+    app: integrador-hpe-suzano
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: integrador-hpe-suzano
+
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+
+  template:
+    metadata:
+      labels:
+        app: integrador-hpe-suzano
+
+    spec:
+      containers:
+        - name: integrador-hpe-suzano
+
+          image: 029142736054.dkr.ecr.us-east-1.amazonaws.com/integrador-hpe-suzano:1.0.0
+          imagePullPolicy: Always
+
+          ports:
+            - name: http
+              containerPort: 8114
+              protocol: TCP
+
+          envFrom:
+            - configMapRef:
+                name: integrador-hpe-suzano-config
+            - secretRef:
+                name: integrador-hpe-suzano-secret
+
+          startupProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 24
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+            successThreshold: 1
+
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+
+          volumeMounts:
+            - name: logs
+              mountPath: /app/logs
+
+      volumes:
+        - name: logs
+          emptyDir: {}
+
+      terminationGracePeriodSeconds: 30

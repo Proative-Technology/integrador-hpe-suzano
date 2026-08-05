@@ -1,0 +1,52 @@
+# Credenciais e configurações sensíveis
+.env
+.env.*
+!.env.example
+secret.env
+*.secret.env
+*-secret.env
+secret*.yaml
+*-secret.yaml
+!secret.example.yaml
+!*.secret.example.yaml
+
+# Ambientes virtuais Python
+.venv/
+venv/
+env/
+
+# Cache Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Logs
+logs/
+*.log
+
+# Bancos e arquivos locais
+*.db
+*.sqlite
+*.sqlite3
+database/*.db
+database/*.sqlite
+database/*.sqlite3
+
+# Arquivos temporários
+*.tmp
+*.swp
+*.swo
+*~
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Build e distribuição Python
+build/
+dist/
+*.egg-info/
