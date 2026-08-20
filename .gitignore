@@ -45,6 +45,8 @@ database/*.sqlite3
 # IDE
 .vscode/
 .idea/
+.cursor/
+graphify-out/
 
 # Build e distribuição Python
 build/
