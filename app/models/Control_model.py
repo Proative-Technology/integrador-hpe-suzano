@@ -11,6 +11,7 @@ class Control(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     opsramp_id = Column(String(255), nullable=False, unique=True)
     topdesk_id = Column(String(255), nullable=True, unique=True)
+    topdesk_number = Column(String(64), nullable=True)
     created_at = Column(DateTime, nullable=False)
     updated_at = Column(DateTime, nullable=True)
     status = Column(String(50), nullable=False)

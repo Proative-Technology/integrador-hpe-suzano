@@ -19,6 +19,21 @@ from app.models.Control_model import Control
 
 DB_CONNECTION = settings.conn_str
 
+
+class TopDeskAPIError(Exception):
+    """Structured TopDesk API failure carrying HTTP status and response body."""
+
+    def __init__(
+        self,
+        message: str,
+        status_code: Optional[int] = None,
+        body: Optional[str] = None,
+    ):
+        super().__init__(message)
+        self.status_code = status_code
+        self.body = body
+
+
 class Branch(BaseModel):
     id: str
 
@@ -110,7 +125,7 @@ class TopDeskdata(BaseModel):
         r = requests.get(url, auth=(self.user, self.password), headers=headers)
         if r.status_code != 200:
             logger.error(f"Erro ao gerar token: {r.status_code} - {r.text}")
-            raise Exception("Erro ao gerar token")
+            raise TopDeskAPIError("Erro ao gerar token", status_code=r.status_code, body=r.text)
         return str(r.text)
     
     def getId(self,endpoint: str, itype: str, sc: str = "") -> str:
@@ -143,7 +158,11 @@ class TopDeskdata(BaseModel):
         r = requests.get(url, auth=HTTPBasicAuth(self.user, self.password), headers=headers)
         if r.status_code != 200:
             logger.error(f"Erro ao coletar ID {endpoint} - {itype}: {r.status_code} - {r.text}")
-            raise Exception("Erro ao coletar ID")
+            raise TopDeskAPIError(
+                f"Erro ao coletar ID {endpoint} - {itype}",
+                status_code=r.status_code,
+                body=r.text,
+            )
         data = r.json()
         id = None
         for item in data:
@@ -183,7 +202,11 @@ class TopDeskdata(BaseModel):
             logger.error(f"Erro ao enviar incidente: {r.status_code} - {r.text} - {r.json()}")
             if 'category' in r.text or 'subcategory' in r.text:
                 logger.error(f"Erro enviar categoria ou subcategoria: {r.text} - self.payload: {self.payload.model_dump_json(exclude_none=True, exclude_unset=True)['category']} - {self.payload.model_dump_json(exclude_none=True, exclude_unset=True)['subcategory']}")
-            raise Exception(f"Erro ao enviar incidente: {r.status_code}--{r.text}")
+            raise TopDeskAPIError(
+                f"Erro ao enviar incidente: {r.status_code}--{r.text}",
+                status_code=r.status_code,
+                body=r.text,
+            )
         logger.debug(f"Data: {r.json()}")
         incident_id = r.json()['id']
         logger.info(f"Incident created successfully with ID: {incident_id}") 
@@ -198,8 +221,10 @@ class TopDeskdata(BaseModel):
             Control.status: data.get("status"),
             Control.updated_at: datetime.now(),
         }
-        if "topdesk_id" in data.keys():
+        if "topdesk_id" in data:
             update_data[Control.topdesk_id] = data.get("topdesk_id")
+        if "topdesk_number" in data:
+            update_data[Control.topdesk_number] = data.get("topdesk_number")
         with Session() as session:
             control = session.query(Control).filter(Control.opsramp_id == opsramp_id).first()
             if control is None:
@@ -220,7 +245,11 @@ class TopDeskdata(BaseModel):
         logger.debug(f'Reqquest {r.request.body} - {r.request.url} - {r.request.headers} - {r.request.method}')
         if r.status_code != 200:
             logger.error(f"Erro ao atualizar ticket: {r.status_code} - {r.text}")
-            raise Exception("Erro ao atualizar ticket")
+            raise TopDeskAPIError(
+                f"Erro ao atualizar ticket: {r.status_code} - {r.text}",
+                status_code=r.status_code,
+                body=r.text,
+            )
         logger.info(f"Ticket {topdesk_id} atualizado com sucesso.")
 
     def close_ticket(self, topdesk_id: str):
@@ -243,7 +272,11 @@ class TopDeskdata(BaseModel):
         logger.debug(f'Reqquest {r.request.body} - {r.request.url} - {r.request.headers} - {r.request.method}')
         if r.status_code != 200:
             logger.error(f"Erro ao fechar ticket: {r.status_code} - {r.text}")
-            raise Exception("Erro ao fechar ticket")
+            raise TopDeskAPIError(
+                f"Erro ao fechar ticket: {r.status_code} - {r.text}",
+                status_code=r.status_code,
+                body=r.text,
+            )
         logger.info(f"Ticket {topdesk_id} fechado com sucesso.")
 
 
