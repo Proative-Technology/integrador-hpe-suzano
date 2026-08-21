@@ -19,6 +19,22 @@ from app.models.Catalog_model import resolve_catalog_match, extract_severity
 from app.models.Audit_model import record_event, track
 
 DB_CONNECTION = settings.conn_str
+HTTP_TIMEOUT = 30
+
+
+class OpsRampAPIError(Exception):
+    """Structured OpsRamp API failure carrying HTTP status and response body."""
+
+    def __init__(
+        self,
+        message: str,
+        status_code: Optional[int] = None,
+        body: Optional[str] = None,
+    ):
+        super().__init__(message)
+        self.status_code = status_code
+        self.body = body
+
 
 def compare_ticket_model_and_db(pydantic_model: BaseModel, sqlalchemy_instance: DeclarativeMeta) -> Dict[str, Dict[str, Any]]:
     """
@@ -186,10 +202,14 @@ class TicketModel(BaseModel):
             'Accept': 'application/json',
             'Content-Type': 'application/x-www-form-urlencoded'
         }
-        response = requests.request("POST", url, headers=headers, data=payload)
+        response = requests.request("POST", url, headers=headers, data=payload, timeout=HTTP_TIMEOUT)
         if response.status_code != 200:
             logger.error(f"Erro ao autenticar: {response.status_code} - {response.text}")
-            raise Exception("Erro ao autenticar")
+            raise OpsRampAPIError(
+                "Erro ao autenticar",
+                status_code=response.status_code,
+                body=response.text,
+            )
         
         return response.json()['access_token']
 
@@ -415,7 +435,7 @@ class TicketModel(BaseModel):
                 }
             ],
         }
-        response = requests.post(url, headers=headers, data=json.dumps(data))
+        response = requests.post(url, headers=headers, data=json.dumps(data), timeout=HTTP_TIMEOUT)
         duration_ms = int((datetime.now() - started).total_seconds() * 1000)
         audit = self._audit_ctx(topdesk_number=topdesk_id)
         if response.status_code in [200, 201]:

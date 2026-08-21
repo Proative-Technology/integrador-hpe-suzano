@@ -18,6 +18,7 @@ from app.models.Control_model import Control
 
 
 DB_CONNECTION = settings.conn_str
+HTTP_TIMEOUT = 30
 
 
 class TopDeskAPIError(Exception):
@@ -122,7 +123,7 @@ class TopDeskdata(BaseModel):
     def getTopdeskToken(self):
         url = self.baseUrl + "/tas/api/login/operator"
         headers = {"Content-type": 'text/plain;charset="UTF-8"'}
-        r = requests.get(url, auth=(self.user, self.password), headers=headers)
+        r = requests.get(url, auth=(self.user, self.password), headers=headers, timeout=HTTP_TIMEOUT)
         if r.status_code != 200:
             logger.error(f"Erro ao gerar token: {r.status_code} - {r.text}")
             raise TopDeskAPIError("Erro ao gerar token", status_code=r.status_code, body=r.text)
@@ -155,7 +156,12 @@ class TopDeskdata(BaseModel):
             url = url + "?start=0&page_size=100"
             ntype = itype.upper()
 
-        r = requests.get(url, auth=HTTPBasicAuth(self.user, self.password), headers=headers)
+        r = requests.get(
+            url,
+            auth=HTTPBasicAuth(self.user, self.password),
+            headers=headers,
+            timeout=HTTP_TIMEOUT,
+        )
         if r.status_code != 200:
             logger.error(f"Erro ao coletar ID {endpoint} - {itype}: {r.status_code} - {r.text}")
             raise TopDeskAPIError(
@@ -195,7 +201,13 @@ class TopDeskdata(BaseModel):
         if self.payload is None:
             logger.error("Payload cannot be None")
             raise ValueError("Payload cannot be None")
-        r = requests.post(url, auth=HTTPBasicAuth(self.user, self.password), headers=headers, data=self.payload.model_dump_json(exclude_none=True, exclude_unset=True))
+        r = requests.post(
+            url,
+            auth=HTTPBasicAuth(self.user, self.password),
+            headers=headers,
+            data=self.payload.model_dump_json(exclude_none=True, exclude_unset=True),
+            timeout=HTTP_TIMEOUT,
+        )
         logger.info(f'Reqquest {r.request.body} - {r.request.url} - {r.request.headers} - {r.request.method}')
         if r.status_code not in [200, 201]:
             logger.info(f"Data sent to Topdesk: {self.payload.model_dump_json(exclude_none=True, exclude_unset=True)}")
@@ -241,7 +253,13 @@ class TopDeskdata(BaseModel):
         headers = {
             "Content-type": 'application/json;charset="UTF-8"',
         }
-        r = requests.put(url, auth=HTTPBasicAuth(self.user, self.password), headers=headers, data=json.dumps(data))
+        r = requests.put(
+            url,
+            auth=HTTPBasicAuth(self.user, self.password),
+            headers=headers,
+            data=json.dumps(data),
+            timeout=HTTP_TIMEOUT,
+        )
         logger.debug(f'Reqquest {r.request.body} - {r.request.url} - {r.request.headers} - {r.request.method}')
         if r.status_code != 200:
             logger.error(f"Erro ao atualizar ticket: {r.status_code} - {r.text}")
@@ -268,7 +286,13 @@ class TopDeskdata(BaseModel):
             },
             "action": "Incidente encerrado no OpsRamp",
         }
-        r = requests.put(url, auth=HTTPBasicAuth(self.user, self.password), headers=headers, data=json.dumps(data))
+        r = requests.put(
+            url,
+            auth=HTTPBasicAuth(self.user, self.password),
+            headers=headers,
+            data=json.dumps(data),
+            timeout=HTTP_TIMEOUT,
+        )
         logger.debug(f'Reqquest {r.request.body} - {r.request.url} - {r.request.headers} - {r.request.method}')
         if r.status_code != 200:
             logger.error(f"Erro ao fechar ticket: {r.status_code} - {r.text}")

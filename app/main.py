@@ -1,6 +1,8 @@
 #import sys
 #import pysqlite3
 #sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+from contextlib import asynccontextmanager
+
 from app.api.v1.api import router as api_router
 from app.config import settings
 from starlette.middleware import Middleware
@@ -15,11 +17,28 @@ import secrets
 from app.models.dbinit import init_db
 from app.health import check_db, check_topdesk, check_opsramp
 from app.logger import logger
+from app.retry_worker import retry_loop
 
 
-
-init_db()# Initialize the database
-
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    retry_task = None
+    if settings.retry_enabled:
+        retry_task = asyncio.create_task(retry_loop())
+        logger.info("Retry background loop started")
+    else:
+        logger.info("Retry background loop disabled (retry_enabled=False)")
+    try:
+        yield
+    finally:
+        if retry_task is not None:
+            retry_task.cancel()
+            try:
+                await retry_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("Retry background loop stopped")
 
 
 origins = [
@@ -50,6 +69,7 @@ app = FastAPI(
     openapi_url="/openapi.json",
     middleware=middleware,
     root_path=settings.root_path,
+    lifespan=lifespan,
 )
 
 app.add_middleware(LoggingMiddleware)

@@ -1,8 +1,9 @@
 from fastapi import APIRouter
-from .endpoints import opsramp, topdesk, monitoring
+from .endpoints import opsramp, topdesk, monitoring, retry
 
 router = APIRouter()
 
 router.include_router(opsramp.router, prefix="/opsramp", tags=["opsramp"])
 router.include_router(topdesk.router, prefix="/topdesk", tags=["topdesk"])
 router.include_router(monitoring.router, prefix="/monitoring", tags=["monitoring"])
+router.include_router(retry.router, prefix="/retry", tags=["retry"])
