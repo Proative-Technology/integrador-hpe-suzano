@@ -15,6 +15,8 @@ from app.logger import logger
 from app.models.Control_model import Control
 from app.models.OpsRamp_models import Ticket
 from app.models.Catalog_model import CategoryCatalog
+from app.models.Audit_model import OperationEvent  # noqa: F401 — register with Base.metadata
+from app.models.Retry_model import FailedOperation  # noqa: F401 — register with Base.metadata
 
 DB_CONNECTION = settings.conn_str
 

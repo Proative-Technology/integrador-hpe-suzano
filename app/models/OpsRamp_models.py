@@ -16,8 +16,25 @@ from app.models.base import Base
 from app.models.Control_model import Control
 from app.models.TopDesk_model import TDIncident, TopDeskdata
 from app.models.Catalog_model import resolve_catalog_match, extract_severity
+from app.models.Audit_model import record_event, track
 
 DB_CONNECTION = settings.conn_str
+HTTP_TIMEOUT = 30
+
+
+class OpsRampAPIError(Exception):
+    """Structured OpsRamp API failure carrying HTTP status and response body."""
+
+    def __init__(
+        self,
+        message: str,
+        status_code: Optional[int] = None,
+        body: Optional[str] = None,
+    ):
+        super().__init__(message)
+        self.status_code = status_code
+        self.body = body
+
 
 def compare_ticket_model_and_db(pydantic_model: BaseModel, sqlalchemy_instance: DeclarativeMeta) -> Dict[str, Dict[str, Any]]:
     """
@@ -185,10 +202,14 @@ class TicketModel(BaseModel):
             'Accept': 'application/json',
             'Content-Type': 'application/x-www-form-urlencoded'
         }
-        response = requests.request("POST", url, headers=headers, data=payload)
+        response = requests.request("POST", url, headers=headers, data=payload, timeout=HTTP_TIMEOUT)
         if response.status_code != 200:
             logger.error(f"Erro ao autenticar: {response.status_code} - {response.text}")
-            raise Exception("Erro ao autenticar")
+            raise OpsRampAPIError(
+                "Erro ao autenticar",
+                status_code=response.status_code,
+                body=response.text,
+            )
         
         return response.json()['access_token']
 
@@ -377,15 +398,30 @@ class TicketModel(BaseModel):
             logger.debug(f"Topdesk ID for ticket with id {self.incident_id} is {topdesk_id}.")
         engine.dispose()
         return str(topdesk_id) if topdesk_id else None
-    
+
+    def _audit_ctx(self, **extra: Any) -> Dict[str, Any]:
+        """Base lookup keys for operation_events rows."""
+        ctx: Dict[str, Any] = {
+            "opsramp_id": self.incident_id,
+            "access_url": str(self.access_url) if self.access_url else None,
+            "subject": self.subject,
+            "client_name": self.client_name,
+        }
+        ctx.update(extra)
+        return ctx
+
     def update_td_ticketNumber(self, topdesk_id: str) -> None:
         """
         Update the Opsramp ticket with the corresponding topdesk ticket number.
+
+        Non-2xx responses are recorded as opsramp_writeback failures but do not raise,
+        preserving historical integration behaviour.
         """
         logger.debug(f"Updating Topdesk ticket number for ticket with id {self.incident_id}.")
         if not self.incident_id:
             logger.error("Cannot update Topdesk ticket number without incident_id.")
             raise ValueError("Cannot update Topdesk ticket number without incident_id.")
+        started = datetime.now()
         url = f"{settings.opsramp_base_url}/api/v2/tenants/{settings.opsramp_tenant}/incidents/{self.incident_id}"
         headers = {
             "Content-Type": "application/json",
@@ -399,11 +435,34 @@ class TicketModel(BaseModel):
                 }
             ],
         }
-        response = requests.post(url, headers=headers, data=json.dumps(data))
+        response = requests.post(url, headers=headers, data=json.dumps(data), timeout=HTTP_TIMEOUT)
+        duration_ms = int((datetime.now() - started).total_seconds() * 1000)
+        audit = self._audit_ctx(topdesk_number=topdesk_id)
         if response.status_code in [200, 201]:
             logger.debug(f"Topdesk ticket number for ticket with id {self.incident_id} updated successfully.")
+            record_event(
+                operation="create",
+                step="opsramp_writeback",
+                outcome="success",
+                duration_ms=duration_ms,
+                http_status=response.status_code,
+                **audit,
+            )
         else:
-            logger.error(f"Failed to update Topdesk ticket number for ticket with id {self.incident_id}. Status code: {response.status_code}, Response: {response.text}")
+            logger.error(
+                f"Failed to update Topdesk ticket number for ticket with id {self.incident_id}. "
+                f"Status code: {response.status_code}, Response: {response.text}"
+            )
+            record_event(
+                operation="create",
+                step="opsramp_writeback",
+                outcome="failure",
+                duration_ms=duration_ms,
+                http_status=response.status_code,
+                error_type="OpsRampAPIError",
+                error_message=response.text,
+                **audit,
+            )
 
     def get_ticketdata(self) -> Optional[Ticket]:
         """
@@ -454,17 +513,31 @@ class TicketModel(BaseModel):
             raise ValueError("Cannot add ticket without incident_id.")
         logger.debug(f"Adding ticket with id {self.incident_id} to the database and converting to Topdesk format.")
         if not self.add_db() or retro:
-            td_data = self.to_topdesk()
-            logger.info(f"Ticket with id {self.incident_id} converted to Topdesk format successfully.") 
-            td_response = td_data.sendToTopDesk()
+            with track("create", "catalog_resolve", self._audit_ctx()) as ctx:
+                td_data = self.to_topdesk()
+            logger.info(f"Ticket with id {self.incident_id} converted to Topdesk format successfully.")
+            with track("create", "topdesk_create", self._audit_ctx()) as ctx:
+                td_response = td_data.sendToTopDesk()
+                ctx["topdesk_id"] = td_response.get("id", "")
+                ctx["topdesk_number"] = td_response.get("number")
             control_data = {
                 "status": td_response.get("status", "UNKNOWN"),
                 "topdesk_id": td_response.get("id", ""),
+                "topdesk_number": td_response.get("number"),
             }
             td_data.update_control(self.incident_id, control_data)
             logger.info(f"Ticket with id {self.incident_id} sent to Topdesk successfully number {td_response['id']}.")
+            # opsramp_writeback records its own success/failure (non-raising on HTTP error)
             self.update_td_ticketNumber(td_response["number"])
-            self.save_tickdata()
+            with track(
+                "create",
+                "db_save",
+                self._audit_ctx(
+                    topdesk_id=td_response.get("id"),
+                    topdesk_number=td_response.get("number"),
+                ),
+            ):
+                self.save_tickdata()
             logger.info(f"Ticket with id {self.incident_id} saved to database successfully.")
         else:
             logger.info(f"Ticket with id {self.incident_id} already exists in the database.")
@@ -480,7 +553,8 @@ class TicketModel(BaseModel):
             differences = compare_ticket_model_and_db(self, old_ticket)
             if differences:
                 logger.info(f"Ticket with id {self.incident_id} has differences with the database: {differences}.")
-                td_data = self.to_topdesk()
+                with track("update", "catalog_resolve", self._audit_ctx(topdesk_id=topdesk_id)):
+                    td_data = self.to_topdesk()
                 topdesk_id = self.get_topdesk_id()
                 if not topdesk_id:
                     logger.error(f"Ticket with id {self.incident_id} has no Topdesk ID, cannot update ticket.")
@@ -489,10 +563,19 @@ class TicketModel(BaseModel):
                 update_data = {
                     "action": f"Campos atualizados no OpsRamp - {differences_str}",
                 }
-                td_data.update_ticket(topdesk_id, update_data)
-                self.save_tickdata()
+                with track("update", "topdesk_update", self._audit_ctx(topdesk_id=topdesk_id)):
+                    td_data.update_ticket(topdesk_id, update_data)
+                with track("update", "db_save", self._audit_ctx(topdesk_id=topdesk_id)):
+                    self.save_tickdata()
                 logger.info(f"Ticket with id {self.incident_id} updated in Topdesk successfully.")
-
+            else:
+                record_event(
+                    operation="skip",
+                    step="no_change",
+                    outcome="success",
+                    **self._audit_ctx(topdesk_id=topdesk_id),
+                )
+                logger.info(f"Ticket with id {self.incident_id} has no differences; recorded no_change.")
 
         if self.status == "Closed" or self.status == "Resolved":
             logger.debug(f"Ticket with id {self.incident_id} is closed, updating control status.")
@@ -500,22 +583,15 @@ class TicketModel(BaseModel):
             if not td_ticket_id:
                 logger.error(f"Ticket with id {self.incident_id} has no Topdesk ID, cannot close ticket.")
                 raise ValueError(f"Ticket with id {self.incident_id} has no Topdesk ID, cannot close ticket.")
-            td_data = self.to_topdesk()
+            with track("close", "catalog_resolve", self._audit_ctx(topdesk_id=td_ticket_id)):
+                td_data = self.to_topdesk()
             control_data = {
                 "status": self.status,
                 "topdesk_id": td_ticket_id,
             }
             td_data.update_control(self.incident_id, control_data)
             logger.debug(f"Ticket with id {self.incident_id} updated on database successfully.")
-            td_data.close_ticket(td_ticket_id)
+            with track("close", "topdesk_close", self._audit_ctx(topdesk_id=td_ticket_id)):
+                td_data.close_ticket(td_ticket_id)
             logger.debug(f"Ticket with id {self.incident_id} closed successfully in Topdesk.")
 
-            
-            
-            
-
-
-
-
-
-        
