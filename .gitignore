@@ -10,6 +10,17 @@ secret*.yaml
 !secret.example.yaml
 !*.secret.example.yaml
 
+# Arquivos de teste
+test/
+*.test.py
+*.test.yaml
+*.test.json
+*.test.xml
+*.test.html
+*.test.css
+/graphify-out/
+.cursor/
+
 # Ambientes virtuais Python
 .venv/
 venv/
