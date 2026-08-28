@@ -235,7 +235,7 @@ class TicketModel(BaseModel):
 
         # Default category/subcategory used when the catalog has no match.
         category_id = "9eca47e4-28cb-4964-84b8-eb70f7a62982"
-        subcategory_id = base_data.getId("/tas/api/incidents/subcategories", "Infraestrutura")
+        subcategory_id = "2b829255-1ba8-4569-81b0-7ec99901a5d4"
         catalog_row = resolve_catalog_match(self.subject, self.description)
         if catalog_row is not None:
             category_id = str(catalog_row.category_id)
