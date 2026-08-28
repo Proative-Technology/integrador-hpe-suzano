@@ -210,10 +210,18 @@ class TopDeskdata(BaseModel):
         )
         logger.info(f'Reqquest {r.request.body} - {r.request.url} - {r.request.headers} - {r.request.method}')
         if r.status_code not in [200, 201]:
-            logger.info(f"Data sent to Topdesk: {self.payload.model_dump_json(exclude_none=True, exclude_unset=True)}")
-            logger.error(f"Erro ao enviar incidente: {r.status_code} - {r.text} - {r.json()}")
-            if 'category' in r.text or 'subcategory' in r.text:
-                logger.error(f"Erro enviar categoria ou subcategoria: {r.text} - self.payload: {self.payload.model_dump_json(exclude_none=True, exclude_unset=True)['category']} - {self.payload.model_dump_json(exclude_none=True, exclude_unset=True)['subcategory']}")
+            payload_dump = self.payload.model_dump(exclude_none=True, exclude_unset=True)
+            logger.info(f"Data sent to Topdesk: {payload_dump}")
+            try:
+                response_body = r.json()
+            except ValueError:
+                response_body = r.text
+            logger.error(f"Erro ao enviar incidente: {r.status_code} - {r.text} - {response_body}")
+            if "category" in r.text or "subcategory" in r.text:
+                logger.error(
+                    f"Erro enviar categoria ou subcategoria: {r.text} - "
+                    f"category={payload_dump.get('category')} subcategory={payload_dump.get('subcategory')}"
+                )
             raise TopDeskAPIError(
                 f"Erro ao enviar incidente: {r.status_code}--{r.text}",
                 status_code=r.status_code,

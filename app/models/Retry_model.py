@@ -14,6 +14,9 @@ DB_CONNECTION = settings.conn_str
 
 RETRYABLE_HTTP_STATUS = {408, 429, 500, 502, 503, 504}
 
+# pymysql errnos that indicate transient connectivity / lock contention.
+TRANSIENT_MYSQL_ERRNOS = {2003, 2006, 2013, 1040, 1205, 1213}
+
 # Stale processing rows older than this are reclaimable (worker crash mid-retry).
 STALE_PROCESSING_MINUTES = 30
 
@@ -51,6 +54,15 @@ def backoff(attempt: int) -> timedelta:
     return timedelta(minutes=minutes)
 
 
+def _mysql_errno(exc: BaseException) -> Optional[int]:
+    orig = getattr(exc, "orig", None)
+    if orig is not None:
+        args = getattr(orig, "args", ())
+        if args and isinstance(args[0], int):
+            return args[0]
+    return None
+
+
 def _http_status_from_exc(exc: BaseException) -> Optional[int]:
     status = getattr(exc, "status_code", None)
     if isinstance(status, int):
@@ -66,6 +78,8 @@ def _http_status_from_exc(exc: BaseException) -> Optional[int]:
 def is_retryable(exc: BaseException) -> bool:
     """True for transient network / 5xx / 429 failures against TopDesk or OpsRamp."""
     # Lazy imports avoid circular deps at module load.
+    from sqlalchemy.exc import DisconnectionError, InterfaceError, OperationalError
+
     from app.models.OpsRamp_models import OpsRampAPIError
     from app.models.TopDesk_model import TopDeskAPIError
 
@@ -79,6 +93,11 @@ def is_retryable(exc: BaseException) -> bool:
     if isinstance(exc, (TopDeskAPIError, OpsRampAPIError)):
         status = _http_status_from_exc(exc)
         return status is None or status in RETRYABLE_HTTP_STATUS
+    if isinstance(exc, (InterfaceError, DisconnectionError)):
+        return True
+    if isinstance(exc, OperationalError):
+        errno = _mysql_errno(exc)
+        return errno in TRANSIENT_MYSQL_ERRNOS if errno is not None else False
     return False
 
 
@@ -89,9 +108,10 @@ def enqueue_failure(
     payload: str,
     exc: BaseException,
     max_attempts: Optional[int] = None,
+    initial_status: str = "pending",
 ) -> Optional[int]:
     """
-    Persist a failed operation for later retry.
+    Persist a failed operation for later retry or dead-letter review.
     Reuses an existing pending row for the same (source, opsramp_id, operation).
     Never raises — queue must not break the integration path.
     """
@@ -124,9 +144,12 @@ def enqueue_failure(
                 existing.error_type = error_type
                 existing.error_message = error_message
                 existing.http_status = http_status
+                existing.status = initial_status
                 existing.updated_at = now
                 # Keep next_attempt_at if already scheduled; otherwise schedule soon.
-                if existing.next_attempt_at is None or existing.next_attempt_at > now + backoff(1):
+                if initial_status == "pending" and (
+                    existing.next_attempt_at is None or existing.next_attempt_at > now + backoff(1)
+                ):
                     existing.next_attempt_at = now
                 session.commit()
                 row_id = existing.id
@@ -136,7 +159,7 @@ def enqueue_failure(
                     operation=operation,
                     opsramp_id=opsramp_id,
                     payload=payload,
-                    status="pending",
+                    status=initial_status,
                     attempts=0,
                     max_attempts=max_attempts,
                     next_attempt_at=now,
@@ -160,10 +183,16 @@ def enqueue_failure(
             error_message=error_message,
             http_status=http_status,
         )
-        logger.info(f"Enqueued failed operation id={row_id} source={source} opsramp_id={opsramp_id}")
+        logger.info(
+            f"Enqueued failed operation id={row_id} status={initial_status} "
+            f"source={source} opsramp_id={opsramp_id}"
+        )
         return row_id
     except Exception as e:
-        logger.error(f"Failed to enqueue retry: {e}")
+        logger.critical(
+            f"Failed to enqueue retry: {e} | source={source} operation={operation} "
+            f"opsramp_id={opsramp_id} payload={payload}"
+        )
         return None
     finally:
         if engine is not None:
