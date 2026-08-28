@@ -512,7 +512,9 @@ class TicketModel(BaseModel):
             logger.error("Cannot add ticket without incident_id.")
             raise ValueError("Cannot add ticket without incident_id.")
         logger.debug(f"Adding ticket with id {self.incident_id} to the database and converting to Topdesk format.")
-        if not self.add_db() or retro:
+        with track("create", "control_upsert", self._audit_ctx()):
+            control_exists = self.add_db()
+        if not control_exists or retro:
             with track("create", "catalog_resolve", self._audit_ctx()) as ctx:
                 td_data = self.to_topdesk()
             logger.info(f"Ticket with id {self.incident_id} converted to Topdesk format successfully.")

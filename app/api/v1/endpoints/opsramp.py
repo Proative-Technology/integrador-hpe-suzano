@@ -33,15 +33,17 @@ async def create_ticket(ticket: TicketModel):
                 error_type=type(e).__name__,
                 error_message=str(e),
             )
-        if is_retryable(e):
-            queue_id = enqueue_failure(
-                source="opsramp_ticket",
-                operation="create",
-                opsramp_id=ticket.incident_id,
-                payload=ticket.model_dump_json(),
-                exc=e,
-                max_attempts=settings.retry_max_attempts,
-            )
+        retryable = is_retryable(e)
+        queue_id = enqueue_failure(
+            source="opsramp_ticket",
+            operation="create",
+            opsramp_id=ticket.incident_id,
+            payload=ticket.model_dump_json(),
+            exc=e,
+            max_attempts=settings.retry_max_attempts,
+            initial_status="pending" if retryable else "dead",
+        )
+        if retryable:
             return JSONResponse(
                 status_code=status.HTTP_202_ACCEPTED,
                 content={
@@ -49,4 +51,10 @@ async def create_ticket(ticket: TicketModel):
                     "retry_id": queue_id,
                 },
             )
-        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"message": "Failed to create ticket"})
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "message": "Failed to create ticket",
+                "retry_id": queue_id,
+            },
+        )
